@@ -1,54 +1,71 @@
 
-from flask import Flask, request, send_file
-from flask_cors import CORS
-import fitz  # PyMuPDF
-import os
-import uuid
+from flask import Flask, request, send_file, jsonify
+from werkzeug.utils import secure_filename
+from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import landscape, A6
+from reportlab.lib.pagesizes import portrait
+from reportlab.lib.units import mm
+from pdf2image import convert_from_bytes
+from io import BytesIO
+from PIL import Image
+import os
 
 app = Flask(__name__)
-CORS(app)  # Libera CORS para qualquer origem
-
-@app.route("/")
-def index():
-    return "Hello, mundo PDF!"
 
 @app.route("/cortar", methods=["POST"])
-def cortar_pdf():
-    if "file" not in request.files:
-        return "Nenhum arquivo enviado", 400
+def cortar_etiquetas():
+    if 'file' not in request.files:
+        return jsonify({"error": "Arquivo não enviado."}), 400
 
-    file = request.files["file"]
-    if file.filename == "":
-        return "Arquivo inválido", 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Nome do arquivo inválido."}), 400
 
-    # Criar arquivo temporário
-    temp_input = f"/tmp/{uuid.uuid4()}.pdf"
-    file.save(temp_input)
+    try:
+        pdf_bytes = file.read()
+        images = convert_from_bytes(pdf_bytes, dpi=300)
 
-    doc = fitz.open(temp_input)
-    imagens = []
+        etiqueta_w, etiqueta_h = 100 * mm, 150 * mm
+        writer = PdfWriter()
 
-    for i, page in enumerate(doc):
-        pix = page.get_pixmap(dpi=300)
-        temp_img_path = f"/tmp/page_{uuid.uuid4()}.png"
-        pix.save(temp_img_path)
-        imagens.append(temp_img_path)
+        for img in images:
+            w, h = img.size
+            cortes = [
+                (0, 0, w // 2, h // 2),
+                (w // 2, 0, w, h // 2),
+                (0, h // 2, w // 2, h),
+                (w // 2, h // 2, w, h),
+            ]
 
-    # Gerar PDF 100x150 mm (tamanho etiqueta)
-    temp_output = f"/tmp/convertido_{uuid.uuid4()}.pdf"
-    c = canvas.Canvas(temp_output, pagesize=landscape(A6))
+            for left, top, right, bottom in cortes:
+                etiqueta = img.crop((left, top, right, bottom))
+                buffer_img = BytesIO()
+                etiqueta.save(buffer_img, format="PNG")
+                buffer_img.seek(0)
 
-    for img_path in imagens:
-        c.drawImage(img_path, 0, 0, width=landscape(A6)[0], height=landscape(A6)[1])
-        c.showPage()
-        os.remove(img_path)
+                packet = BytesIO()
+                c = canvas.Canvas(packet, pagesize=portrait((etiqueta_w, etiqueta_h)))
+                c.drawImage(buffer_img, 0, 0, width=etiqueta_w, height=etiqueta_h)
+                c.save()
 
-    c.save()
-    os.remove(temp_input)
-    return send_file(temp_output, as_attachment=True, download_name="etiquetas_convertidas.pdf")
+                packet.seek(0)
+                new_pdf = PdfReader(packet)
+                writer.add_page(new_pdf.pages[0])
+
+        output = BytesIO()
+        writer.write(output)
+        output.seek(0)
+
+        return send_file(output, download_name="etiquetas_convertidas.pdf", as_attachment=True)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/")
+def home():
+    return "API Convertida rodando com sucesso!"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+
 
