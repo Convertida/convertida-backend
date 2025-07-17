@@ -50,4 +50,5 @@ def cortar_pdf():
     return send_file(temp_output, as_attachment=True, download_name="etiquetas_convertidas.pdf")
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    app.run(host="0.0.0.0", port=5000)
+
